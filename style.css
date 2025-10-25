@@ -1,0 +1,30 @@
+/* style.css */
+
+/* Police système propre */
+body {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans",
+    sans-serif;
+}
+
+/* Scrollbars sombres (pour les tableaux larges) */
+::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+  background: #1e293b; /* slate-800 */
+}
+::-webkit-scrollbar-thumb {
+  background: #475569; /* slate-600 */
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b; /* slate-500 */
+}
