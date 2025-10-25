@@ -1,6 +1,6 @@
 /* style.css */
 
-/* Police système propre */
+/* System font stack */
 body {
   font-family:
     ui-sans-serif,
@@ -15,16 +15,59 @@ body {
     sans-serif;
 }
 
-/* Scrollbars sombres (pour les tableaux larges) */
+/* Dark scrollbar */
 ::-webkit-scrollbar {
   height: 8px;
   width: 8px;
-  background: #1e293b; /* slate-800 */
+  background: #1e293b;
 }
 ::-webkit-scrollbar-thumb {
-  background: #475569; /* slate-600 */
+  background: #475569;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b; /* slate-500 */
+  background: #64748b;
+}
+
+/* Checkbox styling - centered, modern-ish */
+input.chk {
+  display: block;
+  margin: 0 auto;
+  width: 18px;
+  height: 18px;
+  accent-color: #6366f1; /* indigo-500 */
+  cursor: pointer;
+  border-radius: 0.375rem;
+}
+
+/* Percentage styling */
+.pct {
+  white-space: nowrap;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.pct-n1 { color: #38bdf8; }   /* sky-400   */
+.pct-n2 { color: #a78bfa; }   /* violet-400*/
+.pct-n3 { color: #fbbf24; }   /* amber-400 */
+
+/* Track-wide chance (any notch) */
+.pct-track {
+  white-space: nowrap;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #34d399;             /* emerald-400 */
+}
+
+/* Column headers for each notch group */
+.th-notch.n1 { color: #38bdf8; }
+.th-notch.n2 { color: #a78bfa; }
+.th-notch.n3 { color: #fbbf24; }
+.subhead.n1 { color: #38bdf8; }
+.subhead.n2 { color: #a78bfa; }
+.subhead.n3 { color: #fbbf24; }
+
+/* Column header for %Track1/9 */
+.th-track {
+  color: #34d399;             /* emerald-400 */
+  font-weight: 600;
 }

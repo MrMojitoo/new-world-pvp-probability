@@ -1,385 +1,376 @@
 import json
+import csv
 import re
-import math
 
+# --------- Inputs
 INPUT_STORE = "javelindata_pvp_store_v2.json"
 INPUT_REWARDS = "javelindata_pvp_rewards_v2.json"
 INPUT_LOOTTABLES = "javelindata_loottables_pvp_rewards_track.json"
+INPUT_LOOTBUCKETS = "javelindata_lootbuckets_pvp.json"
+
+# NEW: for names/icons
+INPUT_ITEMCSV = "exportItemsNamesS10.csv"        # columns: Item ID, Name, Icon Path, Rarity
+INPUT_ENUS    = "en-us.json"                     # localization for @keys
+INPUT_EMOTES  = "javelindata_emotedefinitions.json"
+
 OUTPUT_JS = "data.js"
 
-# -------------------------------------------------
-# 1. Utilitaires
-# -------------------------------------------------
+CDN_PREFIX = "https://cdn.nw-buddy.de/nw-data/live/"
 
+# --------- Utils
 def bucket_applies(bucket_name: str, level: int) -> bool:
-    """
-    Est-ce que cette ligne du store est active pour ce niveau de PvP Track ?
-    On gère les buckets évidents ('Odds', 'Evens', '5ths', '10ths', 'Post 200').
-    Tout le reste = actif tout le temps pour l'instant.
-    """
     if not bucket_name or bucket_name.strip() == "":
         return True
     b = bucket_name.strip().lower()
-
-    if b == "odds":
-        return (level % 2 == 1)
-    if b == "evens":
-        return (level % 2 == 0)
-    if b == "5ths":
-        return (level % 5 == 0)
-    if b == "10ths":
-        return (level % 10 == 0)
+    if b == "odds":  return (level % 2 == 1)
+    if b == "evens": return (level % 2 == 0)
+    if b == "5ths":  return (level % 5 == 0)
+    if b == "10ths": return (level % 10 == 0)
     if b in ("post 200", "post200", "post_200", "post200+", "post200plus"):
-        return (level > 200)
-
-    # Bucket inconnu => on le garde
+        return level > 200
     return True
 
-
 def prob_at_least_one(weight, total_weight, draws=3):
-    """
-    Approx (tirage avec remise) :
-    P(>=1 fois sur 'draws' choix) = 1 - (1 - p)^draws
-    p = weight / sum(weights)
-    """
-    if total_weight <= 0:
-        return 0.0
-    p_single = weight / total_weight
-    return 1.0 - (1.0 - p_single) ** draws
+    if total_weight <= 0: return 0.0
+    p = weight / total_weight
+    return 1.0 - (1.0 - p) ** draws
 
-
-def clean_loottable_name(item_field: str):
-    """
-    '[LTID]PvP_Whatever' -> 'PvP_Whatever'
-    '[LBID]Something'    -> 'Something'
-    """
-    if not isinstance(item_field, str):
-        return None
-    return re.sub(r"^\[(?:LTID|LBID)\]", "", item_field)
-
+def clean_loottable_name(s: str):
+    if not isinstance(s, str): return None
+    return re.sub(r"^\[(?:LTID|LBID)\]", "", s)
 
 def safe_int(v, default=0):
-    try:
-        return int(v)
+    try: return int(v)
     except Exception:
-        try:
-            return int(float(v))
-        except Exception:
-            return default
+        try: return int(float(v))
+        except Exception: return default
 
+def lc(x: str) -> str:
+    return (x or "").strip().lower()
 
-# -------------------------------------------------
-# 2. Chargement brut des fichiers datasheet
-# -------------------------------------------------
+def full_icon(url: str) -> str:
+    if not url: return ""
+    u = url.strip()
+    if u.startswith("http://") or u.startswith("https://"): return u
+    return CDN_PREFIX + u.lstrip("/")
 
-with open(INPUT_STORE, "r") as f:
+# Rarity → dark backgrounds
+RARITY_COLOR = {
+    "artifact":  "#7f1d1d",  # dark red
+    "legendary": "#9a3412",  # dark orange
+    "epic":      "#5b21b6",  # dark purple
+    "rare":      "#1e40af",  # blue
+    "uncommon":  "#14532d",  # dark green
+    "common":    "#334155",  # dark gray
+}
+
+# --------- Load raw data
+with open(INPUT_STORE, "r", encoding="utf-8") as f:
     store_rows = json.load(f)
-
-with open(INPUT_REWARDS, "r") as f:
+with open(INPUT_REWARDS, "r", encoding="utf-8") as f:
     reward_rows = json.load(f)
-
-with open(INPUT_LOOTTABLES, "r") as f:
+with open(INPUT_LOOTTABLES, "r", encoding="utf-8") as f:
     loot_rows = json.load(f)
 
-# Index pratique par LootTableID
 rows_by_loot_id = {row["LootTableID"]: row for row in loot_rows}
 
-
-# -------------------------------------------------
-# 3. Flatten du store (chaque ligne notch/bucket/reward/poids)
-# -------------------------------------------------
-
+# --------- 1) Flatten store → PVP_DATA (weights / % per notch)
 long_rows = []
 for row in store_rows:
     rowname = row.get("RowPlaceholders", "")
     for notch_idx in (1, 2, 3):
+        reward_id = row.get(f"RewardId{notch_idx}") or row.get(f"RewardID{notch_idx}") or ""
+        if not reward_id: continue
+        weight = int(row.get(f"RandomWeights{notch_idx}", 0) or 0)
+        if weight <= 0: continue
         bucket = row.get(f"Bucket{notch_idx}", "")
-        reward_id = row.get(f"RewardId{notch_idx}", "")
-        weight = row.get(f"RandomWeights{notch_idx}", 0) or 0
         select_once = bool(row.get(f"SelectOnceOnly{notch_idx}", False))
         exclude_cat = row.get(f"ExcludeTypeStage{notch_idx}", "")
+        long_rows.append({
+            "notch": notch_idx,
+            "bucket": bucket,
+            "rewardId": reward_id,
+            "weight": weight,
+            "selectOnceOnly": select_once,
+            "excludeTypeStage": exclude_cat,
+            "rowName": rowname,
+        })
 
-        if reward_id and weight:
-            long_rows.append({
-                "notch": notch_idx,
-                "bucket": bucket,
-                "rewardId": reward_id,
-                "weight": int(weight),
-                "selectOnceOnly": select_once,
-                "excludeTypeStage": exclude_cat,
-                "rowName": rowname,
-            })
-
-# Marquage "artifact-like" (certains rewards sont marqués Artifact dans ExcludeTypeStage)
+# mark artifact-like from ExcludeTypeStage
 artifact_like_map = {}
 for lr in long_rows:
     rid = lr["rewardId"]
-    exclude_cat = (lr.get("excludeTypeStage") or "").lower()
-    is_artifact = "artifact" in exclude_cat
+    is_artifact = "artifact" in (lr.get("excludeTypeStage") or "").lower()
     artifact_like_map[rid] = artifact_like_map.get(rid, False) or is_artifact
-
-
-# -------------------------------------------------
-# 4. Construction de PVP_DATA
-#    => proba d'apparition par TrackLevel (0-230) / Notch (1-3)
-# -------------------------------------------------
 
 def add_entry(store, level, notch, rewards_merged):
     total_w = sum(r["weight"] for r in rewards_merged)
-
-    out_list = []
+    out = []
     for r in rewards_merged:
         w = r["weight"]
         single = (w / total_w * 100.0) if total_w > 0 else 0.0
-        atleast = prob_at_least_one(w, total_w, draws=3) * 100.0
-
-        out_list.append({
+        atleast = prob_at_least_one(w, total_w, 3) * 100.0
+        out.append({
             "rewardId": r["rewardId"],
             "weight": w,
             "selectOnceOnly": r.get("selectOnceOnly", False),
             "percentSingle": round(single, 4),
             "percentAtLeastOneOfThree": round(atleast, 4),
         })
-
-    # tri par % mono tirage décroissant
-    out_list.sort(key=lambda x: x["percentSingle"], reverse=True)
-
-    lvl_key = str(level)
-    notch_key = str(notch)
-    if lvl_key not in store:
-        store[lvl_key] = {}
-    store[lvl_key][notch_key] = {
-        "totalWeight": total_w,
-        "rewards": out_list,
-    }
+    out.sort(key=lambda x: x["percentSingle"], reverse=True)
+    store.setdefault(str(level), {})[str(notch)] = {"totalWeight": total_w, "rewards": out}
 
 PVP_DATA = {}
-for level in range(0, 231):  # TrackLevel 0 → 230
+for level in range(0, 231):
     for notch in (1, 2, 3):
+        pool = [r for r in long_rows if r["notch"] == notch and bucket_applies(r["bucket"], level)]
+        add_entry(PVP_DATA, level, notch, pool)
 
-        # 1. On collecte les lignes actives à ce niveau de PvP Track
-        pool = []
-        for r in long_rows:
-            if r["notch"] == notch and bucket_applies(r["bucket"], level):
-                pool.append({
-                    "rewardId": r["rewardId"],
-                    "weight": r["weight"],
-                    "selectOnceOnly": r["selectOnceOnly"],
-                })
-
-        # 2. Fusion par RewardId
-        merged = {}
-        for item in pool:
-            rid = item["rewardId"]
-            if rid not in merged:
-                merged[rid] = {
-                    "rewardId": rid,
-                    "weight": 0,
-                    "selectOnceOnly": False,
-                }
-            merged[rid]["weight"] += item["weight"]
-            # si l'une des occurrences est "select once", on garde True
-            merged[rid]["selectOnceOnly"] = (
-                merged[rid]["selectOnceOnly"] or item["selectOnceOnly"]
-            )
-
-        rewards_merged = list(merged.values())
-
-        # 3. Calcul des % pour ce notch
-        add_entry(PVP_DATA, level, notch, rewards_merged)
-
-
-# -------------------------------------------------
-# 5. PVP_LOOT_TABLES = comment une LootTable choisit le palier GS
-#    ("Level", "PvP_XP", min thresholds, sous-table éventuelle)
-# -------------------------------------------------
-
+# --------- 2) Build loottable structures (tiers OR / AND + _Probs/_Qty)
 def build_loot_table_struct(table_id: str):
-    """
-    Pour une LootTableID donnée (ex: 'PvP_BasicArmor1_CharmFiltering'),
-    on construit:
-    {
-        "condition": "Level" ou "PvP_XP" (ce que la table regarde)
-        "tiers": [
-            { "min": 0,   "gsRange": "200-300", "subTable": null },
-            { "min": 20,  "gsRange": "300-400", "subTable": null },
-            { "min": 61,  "gsRange": null,      "subTable": "PvP_Prestige..." },
-            ...
-        ]
-    }
-    """
     row = rows_by_loot_id[table_id]
-    probs_row = rows_by_loot_id.get(table_id + "_Probs", {})
-
-    tiers = []
-    i = 1
-    while f"Item{i}" in row:
-        item_val = row.get(f"Item{i}")
-        gs_val = row.get(f"GearScoreRange{i}")
-        raw_thresh = probs_row.get(f"Item{i}", 0)
-        min_val = safe_int(raw_thresh, 0)
-
-        # est-ce que ce palier redirige vers une autre table ?
-        sub_table = None
-        if isinstance(item_val, str) and item_val.startswith("[LTID]"):
-            sub_table = re.sub(r"^\[LTID\]", "", item_val)
-
-        tiers.append({
-            "min": min_val,
-            "gsRange": gs_val if gs_val is not None else None,
-            "subTable": sub_table,
-        })
-        i += 1
-
-    cond_list = row.get("Conditions", [])
-    condition = cond_list[0] if isinstance(cond_list, list) and cond_list else None
-
-    return {
-        "condition": condition,
-        "tiers": tiers,
-    }
-
-
-# -------------------------------------------------
-# 6. PVP_LOOT_CONTENTS = le contenu interne d'une LootTable
-#    (les LBID, quantités, minRoll, GSrange par entrée, etc.)
-#    C'est ce qu'on veut afficher quand on clique sur un [LTID]
-# -------------------------------------------------
-
-def build_loot_roll_contents(table_id: str):
-    """
-    Exemple pris sur PVP_PerkCharmDust :
-
-    - table_id: "PVP_PerkCharmDust"
-      AND/OR: "OR"
-      Item1: "[LBID]PerkCharmMats_All"
-      Item2: "[LBID]PerkCharm"
-    - PVP_PerkCharmDust_Qty :
-      Item1: "2-4"
-      Item2: "1"
-    - PVP_PerkCharmDust_Probs :
-      Item1: "0"
-      Item2: "99000"
-
-    On veut garder pour l'UI :
-      rule (AND/OR)
-      maxRoll
-      entries: [
-        { raw: "[LBID]PerkCharmMats_All", qty: "2-4", gsRange: None, minRoll: 0 },
-        { raw: "[LBID]PerkCharm",         qty: "1",   gsRange: None, minRoll: 99000 }
-      ]
-    """
-    row = rows_by_loot_id[table_id]
-    qty_row = rows_by_loot_id.get(table_id + "_Qty", {})
-    probs_row = rows_by_loot_id.get(table_id + "_Probs", {})
-
+    probs = rows_by_loot_id.get(table_id + "_Probs", {})
     entries = []
     i = 1
     while f"Item{i}" in row:
         raw_item = row.get(f"Item{i}")
-        qty_val = qty_row.get(f"Item{i}")
-        gs_val = row.get(f"GearScoreRange{i}")  # parfois présent
-        min_roll_raw = probs_row.get(f"Item{i}")
-        min_roll = None
-        if min_roll_raw is not None:
-            min_roll = safe_int(min_roll_raw, None)
-
+        gs_val = row.get(f"GearScoreRange{i}")
+        min_roll = safe_int(probs.get(f"Item{i}", 0), 0)
+        sub_table = None
+        if isinstance(raw_item, str) and raw_item.startswith("[LTID]"):
+            sub_table = clean_loottable_name(raw_item)
         entries.append({
             "raw": raw_item,
-            "qty": qty_val,
             "gsRange": gs_val if gs_val is not None else None,
             "minRoll": min_roll,
+            "subTable": sub_table,
         })
         i += 1
-
+    cond = None
     cond_list = row.get("Conditions", [])
-    condition = cond_list[0] if isinstance(cond_list, list) and cond_list else None
-
+    if isinstance(cond_list, list) and cond_list: cond = cond_list[0]
     rule_val = row.get("AND/OR") or row.get("AND\\/OR") or ""
-
     return {
-        "condition": condition,
+        "condition": cond,
         "rule": rule_val,
         "rollBonusSetting": row.get("RollBonusSetting") or "",
         "maxRoll": row.get("MaxRoll", 0),
         "entries": entries,
     }
 
+def build_loot_roll_contents(table_id: str):
+    row = rows_by_loot_id[table_id]
+    qtys = rows_by_loot_id.get(table_id + "_Qty", {})
+    entries = []
+    i = 1
+    while f"Item{i}" in row:
+        raw_item = row.get(f"Item{i}")
+        qty_val = qtys.get(f"Item{i}")
+        min_roll_raw = row.get(f"Item{i}")
+        min_roll = None
+        entries.append({
+            "raw": raw_item,
+            "qty": qty_val,
+        })
+        i += 1
+    return entries
 
 PVP_LOOT_TABLES = {}
 PVP_LOOT_CONTENTS = {}
-for table_id in rows_by_loot_id.keys():
-    # on saute les _Qty / _Probs elles-mêmes
-    if table_id.endswith("_Qty") or table_id.endswith("_Probs"):
-        continue
-    PVP_LOOT_TABLES[table_id] = build_loot_table_struct(table_id)
-    PVP_LOOT_CONTENTS[table_id] = build_loot_roll_contents(table_id)
+for tid in rows_by_loot_id.keys():
+    if tid.endswith("_Qty") or tid.endswith("_Probs"): continue
+    PVP_LOOT_TABLES[tid] = build_loot_table_struct(tid)
+    PVP_LOOT_CONTENTS[tid] = build_loot_roll_contents(tid)
 
-
-# -------------------------------------------------
-# 7. PVP_REWARD_META = méta par RewardID
-#    (nom affichable, lootTableId associée, coût Azoth Salt, etc.)
-# -------------------------------------------------
-
+# --------- 3) Reward meta (base)
 PVP_REWARD_META = {}
 for r in reward_rows:
     rid = r.get("RewardID") or r.get("RewardId") or ""
-    if not rid:
-        continue
-
-    # champs utiles
-    item_field = r.get("Item") or ""
-    raw_item_field = item_field  # on le garde tel quel pour debug / fallback nom
+    if not rid: continue
+    item_field = (r.get("Item") or "").strip()
+    raw_item_field = item_field
     item_clean = clean_loottable_name(item_field) or ""
-    name_field = r.get("Name") or ""
+    name_field = (r.get("Name") or "").strip()
     desc_field = r.get("Description") or ""
     icon_path = r.get("IconPath") or ""
-
-    # meilleur nom à afficher
-    if name_field.strip():
-        best_name = name_field.strip()
-    elif item_field.strip():
-        best_name = item_field.strip()
+    if name_field:
+        best_name = name_field
+    elif item_field:
+        best_name = item_field
     else:
         best_name = rid
-
-    # si RollOnPresent = true et l'Item est un [LTID]..., c'est la loot table à dérouler
-    final_loot_id = None
-    if r.get("RollOnPresent") and item_clean:
-        final_loot_id = item_clean
-
+    final_loot_id = item_clean if (r.get("RollOnPresent") and item_clean) else None
     buy_cost = r.get("BuyCategoricalProgressionCost")
     buy_currency = r.get("BuyCategoricalProgressionCurrencyId") or ""
-
-    # uniqueEligible : on ne veut pouvoir cocher que les trucs vraiment uniques
-    # logique : ENT_... (skins / emotes / titres / entitlements) OU artefacts
     is_ent = rid.startswith("ENT_")
     is_art = rid.startswith("ITM_Artifacts") or artifact_like_map.get(rid, False)
     uniqueEligible = bool(is_ent or is_art)
-
     PVP_REWARD_META[rid] = {
-        "name": best_name,
+        "name": best_name,                # will be localized/enriched below
         "description": desc_field,
-        "icon": icon_path,
+        "icon": icon_path,                # will be normalized/enriched below
+        "rarity": "",                     # NEW
         "rollOnPresent": bool(r.get("RollOnPresent", False)),
         "quantity": r.get("Quantity"),
         "buyCost": buy_cost,
         "buyCurrency": buy_currency,
-        "lootTableId": final_loot_id,     # ex: "PvP_BasicArmor1_CharmFiltering"
-        "rawItemField": raw_item_field,   # ex: "[LTID]PvP_BasicArmor1_CharmFiltering"
+        "lootTableId": final_loot_id,
+        "rawItemField": raw_item_field,   # keep original for fallback & CSV lookup
         "gameEvent": r.get("GameEvent") or "",
         "uniqueEligible": uniqueEligible,
     }
 
+# --------- 4) Loot buckets (LBID → final items)
+with open(INPUT_LOOTBUCKETS, "r", encoding="utf-8") as f:
+    lootbuckets_rows = json.load(f)
 
-# -------------------------------------------------
-# 8. Dump JS -> data.js
-# -------------------------------------------------
+firstrow = next((r for r in lootbuckets_rows if (r.get("RowPlaceholders") or "").upper() == "FIRSTROW"), None)
+idx_to_bucket = {}
+if firstrow:
+    for k, v in firstrow.items():
+        if isinstance(k, str) and k.startswith("LootBucket"):
+            idx_to_bucket[k.replace("LootBucket", "")] = v
 
+bucket_contents = {b: [] for b in idx_to_bucket.values()}
+for row in lootbuckets_rows:
+    for idx, bucket in idx_to_bucket.items():
+        item_key = f"Item{idx}"
+        qty_key  = f"Quantity{idx}"
+        tags_key = f"Tags{idx}"
+        if item_key in row and row[item_key]:
+            tags_val = row.get(tags_key, [])
+            if isinstance(tags_val, str): tags_val = [tags_val]
+            bucket_contents[bucket].append({
+                "itemId": row[item_key],
+                "qty": row.get(qty_key, None),
+                "tags": tags_val or []
+            })
+
+# --------- 5) New: load CSV / en-us / emotes, then ENRICH names + icons + rarity
+# CSV
+catalog_by_id = {}
+catalog_by_name = {}
+try:
+    with open(INPUT_ITEMCSV, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            iid = (row.get("Item ID") or row.get("ItemID") or "").strip()
+            nm  = (row.get("Name") or "").strip()
+            ip  = (row.get("Icon Path") or row.get("IconPath") or "").strip()
+            rr  = (row.get("Rarity") or "").strip()
+            if not (iid or nm): continue
+            rec = {"id": iid, "name": nm, "icon": full_icon(ip), "rarity": rr}
+            if iid: catalog_by_id[iid] = rec
+            if nm:  catalog_by_name[lc(nm)] = rec
+except Exception as e:
+    # CSV optional; if missing we just won't have icons/rarities for many items
+    pass
+
+# en-us
+en_us = {}
+try:
+    with open(INPUT_ENUS, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+        en_us = {lc(k): v for k, v in raw.items()}
+except Exception:
+    en_us = {}
+
+# Emotes
+emote_icon_by_key = {}
+try:
+    with open(INPUT_EMOTES, "r", encoding="utf-8") as f:
+        arr = json.load(f)
+        for e in arr:
+            key = lc(e.get("DisplayName"))
+            if key:
+                emote_icon_by_key[key] = full_icon(e.get("UiImage") or "")
+except Exception:
+    emote_icon_by_key = {}
+
+def resolve_localized_name(name_or_at: str) -> str:
+    if not name_or_at: return ""
+    if name_or_at.startswith("@"):
+        k = lc(name_or_at[1:])
+        # normalize emote keys: often '..._name'
+        if k.endswith("_name"): k = k[:-5]
+        return en_us.get(k, name_or_at)
+    return name_or_at
+
+def resolve_icon_and_rarity(name_or_at: str, maybe_item_id: str):
+    # 1) if it's @ui_emote..., try emotedefs
+    if name_or_at.startswith("@"):
+        k = lc(name_or_at[1:])
+        if k.endswith("_name"): k = k[:-5]
+        if k.startswith("ui_emote") and k in emote_icon_by_key:
+            return emote_icon_by_key[k], ""
+    # 2) try by NAME in CSV
+    nm = resolve_localized_name(name_or_at)
+    rec = catalog_by_name.get(lc(nm))
+    if rec:
+        return rec["icon"], rec["rarity"]
+    # 3) try by ITEM ID (raw)
+    if maybe_item_id and not maybe_item_id.startswith("[LTID]"):
+        rec2 = catalog_by_id.get(maybe_item_id)
+        if rec2:
+            return rec2["icon"], rec2["rarity"]
+    return "", ""
+
+def enrich_reward_meta():
+    for rid, meta in PVP_REWARD_META.items():
+        disp_name = resolve_localized_name(meta["name"])
+        # If we still have a raw Item id and no nice name, try CSV name
+        if disp_name == rid or disp_name.startswith("[LTID]"):
+            rec = catalog_by_id.get(meta.get("rawItemField") or "")
+            if rec and rec["name"]:
+                disp_name = rec["name"]
+        icon, rar = resolve_icon_and_rarity(meta["name"], meta.get("rawItemField") or "")
+        # fallback: if still empty, try CSV by name we just resolved
+        if not icon and disp_name:
+            recn = catalog_by_name.get(lc(disp_name))
+            if recn: icon, rar = recn["icon"], recn["rarity"]
+        meta["name"] = disp_name
+        if icon: meta["icon"] = icon
+        if rar:  meta["rarity"] = rar
+
+def enrich_bucket_items():
+    for bname, items in bucket_contents.items():
+        for it in items:
+            raw = it.get("itemId") or ""
+            # Most LB items are plain item IDs. Some could be @keys.
+            disp = resolve_localized_name(raw)
+            if disp == raw:
+                # try CSV by ID
+                rec = catalog_by_id.get(raw)
+                if rec:
+                    disp = rec["name"]
+                    it["icon"] = rec["icon"]
+                    it["rarity"] = rec["rarity"]
+                else:
+                    it["icon"] = ""
+                    it["rarity"] = ""
+            else:
+                # we resolved a @key → name. Try CSV by NAME first
+                recn = catalog_by_name.get(lc(disp))
+                if recn:
+                    it["icon"] = recn["icon"]
+                    it["rarity"] = recn["rarity"]
+                else:
+                    # emote icon if applicable
+                    key = lc(raw.lstrip("@"))
+                    if key.endswith("_name"): key = key[:-5]
+                    it["icon"] = emote_icon_by_key.get(key, "")
+                    it["rarity"] = ""
+            it["displayName"] = disp
+
+enrich_reward_meta()
+enrich_bucket_items()
+
+# --------- Dump JS
 with open(OUTPUT_JS, "w", encoding="utf-8") as f:
-    f.write("window.PVP_DATA = " + json.dumps(PVP_DATA, separators=(",", ":")) + ";\n")
-    f.write("window.PVP_REWARD_META = " + json.dumps(PVP_REWARD_META, separators=(",", ":")) + ";\n")
-    f.write("window.PVP_LOOT_TABLES = " + json.dumps(PVP_LOOT_TABLES, separators=(",", ":")) + ";\n")
-    f.write("window.PVP_LOOT_CONTENTS = " + json.dumps(PVP_LOOT_CONTENTS, separators=(",", ":")) + ";\n")
+    f.write("window.PVP_DATA=" + json.dumps(PVP_DATA, separators=(",", ":")) + ";\n")
+    f.write("window.PVP_REWARD_META=" + json.dumps(PVP_REWARD_META, separators=(",", ":")) + ";\n")
+    f.write("window.PVP_LOOT_TABLES=" + json.dumps(PVP_LOOT_TABLES, separators=(",", ":")) + ";\n")
+    f.write("window.PVP_LOOT_CONTENTS=" + json.dumps(PVP_LOOT_CONTENTS, separators=(",", ":")) + ";\n")
+    f.write("window.PVP_BUCKET_CONTENTS=" + json.dumps(bucket_contents, separators=(",", ":")) + ";\n")
 
 print("OK ->", OUTPUT_JS)
