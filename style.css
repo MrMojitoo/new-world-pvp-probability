@@ -38,6 +38,7 @@ input.chk {
   accent-color: #6366f1; /* indigo-500 */
   cursor: pointer;
   border-radius: 0.375rem;
+  background-color: #1e2537;
 }
 
 /* Percentage styling */
@@ -70,4 +71,78 @@ input.chk {
 .th-track {
   color: #34d399;             /* emerald-400 */
   font-weight: 600;
+}
+
+ 
+/* --- Sort arrows / header active state --- */
+.sort-arrows {
+  font-size: 8px;
+  line-height: 1;
+  margin-left: 0.25rem; /* ~ml-1 */
+  display: inline-block;
+}
+
+.sort-arrows .arrow-up,
+.sort-arrows .arrow-down {
+  opacity: .2;
+  transition: opacity .15s;
+}
+
+/* Quand la colonne est triée ASC: on met en avant la flèche du haut */
+th.active-sort-asc .sort-arrows .arrow-up {
+  opacity: 1;
+  filter: drop-shadow(0 0 2px rgba(255,255,255,0.6));
+}
+/* Quand la colonne est triée DESC: on met en avant la flèche du bas */
+th.active-sort-desc .sort-arrows .arrow-down {
+  opacity: 1;
+  filter: drop-shadow(0 0 2px rgba(255,255,255,0.6));
+}
+
+
+.icon-wrap {
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+  border-radius: 0.5rem;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+
+  background: #334155; /* default dark gray */
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
+}
+.lt-badge {
+  width: 100%;
+  height: 100%;
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+
+.icon-wrap img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.rar-artifact  { background:#7f1d1d; }  /* dark red */
+.rar-legendary { background:#9a3412; }  /* dark orange */
+.rar-epic      { background:#5b21b6; }  /* dark purple */
+.rar-rare      { background:#1e40af; }  /* blue */
+.rar-uncommon  { background:#14532d; }  /* dark green */
+.rar-common    { background:#334155; }  /* dark gray */
+.rar-unknown   { background:#334155; }  /* fallback */
+
+/* Highlight when a search target is reached */
+.search-highlight {
+  outline: 2px solid #f59e0b;           /* amber-500 */
+  background-color: rgba(245, 158, 11, .08);
+  transition: background-color .2s ease;
 }
